@@ -1,10 +1,10 @@
-import FungibleToken from 0xFUNGIBLETOKENADDRESS
-import NonFungibleToken from 0xNFTADDRESS
-import MetadataViews from 0xMETADATAVIEWSADDRESS
+import FungibleToken from 0xf8d6e0586b0a20c7
+import NonFungibleToken from 0xf8d6e0586b0a20c7
+import MetadataViews from 0xf8d6e0586b0a20c7
 
 pub contract PiggyBanks: NonFungibleToken {
     // The network the contract is deployed on
-    pub fun Network() : String { return ${NETWORK} }
+    //pub fun Network() : String { return ${NETWORK} }
 
     // -----------------------------------------------------------------------
     // PiggyBanks contract Events
@@ -20,6 +20,12 @@ pub contract PiggyBanks: NonFungibleToken {
     pub event SetBroken(piggyID: UInt32)
     // Emitted when a Donation is destroyed
     pub event DonationDestroyed(id: UInt64)
+    // Events for Collection-related actions
+    //
+    // Emitted when a donation is withdrawn from a Collection
+    pub event Withdraw(id: UInt64, from: Address?)
+    // Emitted when a donation is deposited into a Collection
+    pub event Deposit(id: UInt64, to: Address?)
 
     
 
@@ -31,6 +37,12 @@ pub contract PiggyBanks: NonFungibleToken {
     // Variable size dictionary of Piggy structs
     access(self) var piggiesDatas: {UInt32: Piggy}
 
+     // Mapping of Piggy IDs that indicates the number of Donations     
+    // that have been done for specific Piggies.
+    // When a Donation is made, this value is stored in the Donation to
+    // show its place in the Piggy, eg. 13 of 60.
+    access(contract) var numberOfDonationsPerPig: {UInt32: UInt32}
+
     // The ID that is used to create Piggies. 
     // Every time a Piggy is created, piggyID is assigned 
     // to the new Piggy's ID and then is incremented by 1.
@@ -40,7 +52,7 @@ pub contract PiggyBanks: NonFungibleToken {
     // Because NFTs can be destroyed, it doesn't necessarily mean that this
     // reflects the total number of NFTs in existence, just the number that
     // have been minted to date. Also used as global moment IDs for minting.
-    pub var totalDonations: UInt64
+    pub var totalSupply: UInt64
 
     pub struct Piggy {
 
@@ -63,18 +75,11 @@ pub contract PiggyBanks: NonFungibleToken {
 
         // Piggy collected amount, will be zero until pig is broken.
         // IN CENTS
-        pub let collectedAmount: UInt64
+        pub var collectedAmount: UInt64
 
         // Piggy royalty to breaker.
         // IN CENTS
-        pub let breakerRoyalty: UInt64
-
-
-        // Mapping of Piggy IDs that indicates the number of Donations     
-        // that have been done for specific Piggies.
-        // When a Donation is made, this value is stored in the Donation to
-        // show its place in the Piggy, eg. 13 of 60.
-        access(contract) var numberOfDonationsPerPig: {UInt32: UInt32}
+        pub var breakerRoyalty: UInt64
 
         init(metadata: {String: String}) {
             pre {
@@ -84,6 +89,7 @@ pub contract PiggyBanks: NonFungibleToken {
             self.metadata = metadata
             self.collectedAmount = 0
             self.breakerRoyalty = 0
+            self.broken = false
             PiggyBanks.piggiesDatas[self.piggyID] = self
         }
 
@@ -100,31 +106,31 @@ pub contract PiggyBanks: NonFungibleToken {
             }
         }
 
-        pub fun mintDonation(piggyID: UInt32): @NFT {
+        pub fun mintDonation(piggyID: UInt32, donationComment : String): @NFT {
             pre {
-                !self.locked: "Cannot make the donation to the Piggy because the piggy is broken."           
+                !self.broken: "Cannot make the donation to the Piggy because the piggy is broken."           
             }
 
             // Gets the number of Donation that have been made for this Piggy
             // to use as this Donation's serial number
-            let numInPiggy = self.numberOfDonationsPerPig[piggyID]!
+            let numInPiggy = PiggyBanks.numberOfDonationsPerPig[piggyID]!
 
             // Mint the new Donation
             let newDonation: @NFT <- create NFT(serialNumber: numInPiggy + UInt32(1),
-                                              piggyID: piggyID)
+                                              piggyID: piggyID, donationComment: donationComment)
 
-            // Increment the count of Moments minted for this Piggy
-            self.numberOfDonationsPerPig[piggyID] = numInPiggy + UInt32(1)
+            // Increment the count of Donations minted for this Piggy
+            PiggyBanks.numberOfDonationsPerPig[piggyID] = numInPiggy + UInt32(1)
 
             return <-newDonation
         }
 
-        pub fun getBroken(): {UInt32: Bool} {
+        pub fun getBroken(): Bool {
             return self.broken
         }
 
-        pub fun getNumOfDonationsPerPig(): {UInt32: UInt32} {
-            return self.numberOfDonationsPerPig
+        pub fun getNumOfDonations(piggyID: UInt32): UInt32? {
+            return PiggyBanks.numberOfDonationsPerPig[self.piggyID]
         }
     }
 
@@ -137,9 +143,9 @@ pub contract PiggyBanks: NonFungibleToken {
         pub let serialNumber: UInt32
 
         // Donation reason, by default is empty
-        pub let donationComment : String?
+        pub let donationComment : String
 
-        init(piggyID: UInt32, serialNumber: UInt32, donationComment: String?) {
+        init(piggyID: UInt32, serialNumber: UInt32, donationComment: String) {
             self.piggyID = piggyID
             self.serialNumber = serialNumber
             self.donationComment = donationComment
@@ -157,14 +163,14 @@ pub contract PiggyBanks: NonFungibleToken {
         // Struct of Donation metadata
         pub let data: DonationData
 
-        init(serialNumber: UInt32, piggyID: UInt32, donationComment: String?) {
+        init(serialNumber: UInt32, piggyID: UInt32, donationComment: String) {
             // Increment the global Moment IDs
-            PiggyBanks.totalDonations = PiggyBanks.totalDonations + UInt64(1)
+            PiggyBanks.totalSupply = PiggyBanks.totalSupply + UInt64(1)
 
-            self.id = PiggyBanks.totalDonations
+            self.id = PiggyBanks.totalSupply
 
             // Set the metadata struct
-            self.data = DonationData(piggyID: piggyID, serialNumber: serialNumber, donationComment: String?)
+            self.data = DonationData(piggyID: piggyID, serialNumber: serialNumber, donationComment: donationComment)
 
             emit DonationMinted(donationID: self.id,
                               piggyID: piggyID,
@@ -179,22 +185,21 @@ pub contract PiggyBanks: NonFungibleToken {
         // Add more metadata, for example. donation for piggy reason or whatever, define all metadata.
         pub fun name(): String {
             return "Donation number"
-                .concat(self.data.serialNumber)
+                .concat(self.data.serialNumber.toString())
                 .concat("for piggy with id :")
-                .concat(self.data.serialNumber)
+                .concat(self.data.serialNumber.toString())
         }
 
         pub fun description(): String {
-            return donationComment.length > 0 ? donationComment : "No reason"
+            return self.data.donationComment.length > 0 ? self.data.donationComment : "No reason"
         }
 
         // All supported metadata views for the Moment including the Core NFT Views
         pub fun getViews(): [Type] {
             return [
-                Type<MetadataViews.DisPiggy>(),
+                Type<MetadataViews.Display>(),
                 Type<MetadataViews.ExternalURL>(),
-                Type<MetadataViews.NFTCollectionData>(),
-                Type<MetadataViews.NFTCollectionDisPiggy>(),
+                Type<MetadataViews.NFTCollectionDisplay>(),
                 Type<MetadataViews.Serial>(),
                 Type<MetadataViews.Medias>()
             ]
@@ -204,8 +209,8 @@ pub contract PiggyBanks: NonFungibleToken {
 
         pub fun resolveView(_ view: Type): AnyStruct? {
             switch view {
-                case Type<MetadataViews.DisPiggy>():
-                    return MetadataViews.DisPiggy(
+                case Type<MetadataViews.Display>():
+                    return MetadataViews.Display(
                         name: self.name(),
                         description: self.description(),
                         thumbnail: MetadataViews.HTTPFile(url: self.thumbnail())
@@ -216,19 +221,7 @@ pub contract PiggyBanks: NonFungibleToken {
                     )
                 case Type<MetadataViews.ExternalURL>():
                     return MetadataViews.ExternalURL(self.getDonationURL())
-                case Type<MetadataViews.NFTCollectionData>():
-                    return MetadataViews.NFTCollectionData(
-                        storagePath: /storage/DonationCollection,
-                        publicPath: /public/DonationCollection,
-                        providerPath: /private/DonationCollection,
-                        publicCollection: Type<&PiggyBanks.Collection{PiggyBanks.DonationCollectionPublic}>(),
-                        publicLinkedType: Type<&PiggyBanks.Collection{PiggyBanks.DonationCollectionPublic,NonFungibleToken.Receiver,NonFungibleToken.CollectionPublic,MetadataViews.ResolverCollection}>(),
-                        providerLinkedType: Type<&PiggyBanks.Collection{NonFungibleToken.Provider,PiggyBanks.DonationCollectionPublic,NonFungibleToken.Receiver,NonFungibleToken.CollectionPublic,MetadataViews.ResolverCollection}>(),
-                        createEmptyCollectionFunction: (fun (): @NonFungibleToken.Collection {
-                            return <-PiggyBanks.createEmptyCollection()
-                        })
-                    )
-                case Type<MetadataViews.NFTCollectionDisPiggy>():
+                case Type<MetadataViews.NFTCollectionDisplay>():
                     let bannerImage = MetadataViews.Media(
                         file: MetadataViews.HTTPFile(
                             url: "https://gopiggy.com/static/img/some-image.svg"
@@ -241,7 +234,7 @@ pub contract PiggyBanks: NonFungibleToken {
                         ),
                         mediaType: "image/png"
                     )
-                    return MetadataViews.NFTCollectionDisPiggy(
+                    return MetadataViews.NFTCollectionDisplay(
                         name: "PiggyBanks",
                         description: "Piggy Bank is to chance to change someone life while you get a valuable NFT and a chance to obtain more than your gift!!!",
                         externalURL: MetadataViews.ExternalURL("https://gopiggy.com"),
@@ -305,11 +298,12 @@ pub contract PiggyBanks: NonFungibleToken {
 
         // appends and optional network param needed to resolve the media
         pub fun appendOptionalParams(url: String, firstDelim: String): String {
-            if (PiggyBanks.Network() == "testnet") {
-                return url.concat(firstDelim).concat("testnet")
-            }
+            //if (PiggyBanks.Network() == "testnet") {
+            //    return url.concat(firstDelim).concat("testnet")
+            //}
             return url
         }
+    }
 
    
     
@@ -353,7 +347,7 @@ pub contract PiggyBanks: NonFungibleToken {
     // This is the interface that users can cast their Donations Collection as
     // to allow others to deposit Donations into their Collection. It also allows for reading
     // the IDs of Donations in the Collection.
-    pub resource interface MomentCollectionPublic {
+    pub resource interface DonationCollectionPublic {
         pub fun deposit(token: @NonFungibleToken.NFT)
         pub fun batchDeposit(tokens: @NonFungibleToken.Collection)
         pub fun getIDs(): [UInt64]
@@ -371,7 +365,7 @@ pub contract PiggyBanks: NonFungibleToken {
     // Collection is a resource that every user who owns NFTs 
     // will store in their account to manage their NFTS
     //
-    pub resource Collection: MomentCollectionPublic, NonFungibleToken.Provider, NonFungibleToken.Receiver, NonFungibleToken.CollectionPublic, MetadataViews.ResolverCollection { 
+    pub resource Collection: DonationCollectionPublic, NonFungibleToken.Provider, NonFungibleToken.Receiver, NonFungibleToken.CollectionPublic, MetadataViews.ResolverCollection { 
         // Dictionary of Donations conforming tokens
         // NFT is a resource type with a UInt64 ID field
         pub var ownedNFTs: @{UInt64: NonFungibleToken.NFT}
@@ -578,8 +572,9 @@ pub contract PiggyBanks: NonFungibleToken {
     init() {
         // Initialize contract fields
         self.piggiesDatas = {}
+        self.numberOfDonationsPerPig = {}
         self.nextpiggyID = 1
-        self.totalDonations = 0
+        self.totalSupply = 0
 
         // Put a new Collection in storage
         self.account.save<@Collection>(<- create Collection(), to: /storage/DonationCollection)
